@@ -195,17 +195,17 @@ def main():
                     target_rgb = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
                     result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
                     
-                    st.success("Face swap completed!")
+                   st.success("Face swap completed!")
                     cols = st.columns(3)
                     with cols[0]:
                         st.subheader("Source")
-                        st.image(source_rgb, use_column_width=True)
+                        st.image(source_rgb, use_container_width=True)
                     with cols[1]:
                         st.subheader("Target")
-                        st.image(target_rgb, use_column_width=True)
+                        st.image(target_rgb, use_container_width=True)
                     with cols[2]:
                         st.subheader("Result")
-                        st.image(result_rgb, use_column_width=True)
+                        st.image(result_rgb, use_container_width=True)
                     
                     # Download button
                     result_pil = Image.fromarray(result_rgb)
