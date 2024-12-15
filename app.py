@@ -115,10 +115,6 @@ class APIFaceSwapper:
         except Exception as e:
             return None, f"Error during face swapping: {str(e)}"
 
-def initialize_session_state():
-    if 'api_key' not in st.session_state:
-        st.session_state.api_key = None
-
 def main():
     st.set_page_config(
         page_title="AI Face Swap App",
@@ -126,17 +122,12 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    initialize_session_state()
-    
     st.title("🎭 AI Face Swap")
     
     # API Key Configuration
     with st.sidebar:
         st.header("API Configuration")
-        api_key = st.text_input("Enter your API Key", type="password", value="demo-key")
-        if st.button("Save API Key"):
-            st.session_state.api_key = api_key
-            st.success("API Key saved successfully!")
+        api_key = st.text_input("Enter your API Key", value="demo-key", type="password")
         
         st.divider()
         
@@ -158,8 +149,8 @@ def main():
     Upload two images to swap faces between them. The app will detect faces automatically and perform the swap.
     """)
     
-    # Initialize face swapper with API key
-    face_swapper = APIFaceSwapper(st.session_state.api_key or "demo-key")
+    # Initialize face swapper
+    face_swapper = APIFaceSwapper(api_key)
     
     # Image upload section
     col1, col2 = st.columns(2)
@@ -195,7 +186,7 @@ def main():
                     target_rgb = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
                     result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
                     
-                   st.success("Face swap completed!")
+                    st.success("Face swap completed!")
                     cols = st.columns(3)
                     with cols[0]:
                         st.subheader("Source")
