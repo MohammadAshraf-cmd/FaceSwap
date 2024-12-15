@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import cv2
 import mediapipe as mp
@@ -7,23 +6,7 @@ from PIL import Image
 import tempfile
 import os
 from pathlib import Path
-import requests
-import json
 from datetime import datetime
-
-# Install required packages if not already installed
-import subprocess
-import sys
-
-def install_packages():
-    packages = ['mediapipe', 'opencv-python-headless', 'numpy', 'pillow', 'requests']
-    for package in packages:
-        try:
-            __import__(package)
-        except ImportError:
-            subprocess.check_call([sys.executable, '-m', 'pip', 'install', package])
-
-install_packages()
 
 class APIFaceSwapper:
     def __init__(self, api_key):
@@ -36,8 +19,101 @@ class APIFaceSwapper:
             min_tracking_confidence=0.5
         )
         
-        # Rest of the FaceSwapper implementation remains the same
-        # ... [Previous FaceSwapper code] ...
+        # Face outline landmarks
+        self.FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+                         397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+                         172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+
+    def get_face_landmarks(self, image):
+        """Extract facial landmarks using MediaPipe."""
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self.face_mesh.process(image_rgb)
+        if not results.multi_face_landmarks:
+            return None
+        return results.multi_face_landmarks[0]
+    
+    def create_mask(self, image, landmarks):
+        """Create a mask for the face region."""
+        height, width = image.shape[:2]
+        mask = np.zeros((height, width), dtype=np.uint8)
+        
+        points = []
+        for idx in self.FACE_OVAL:
+            point = landmarks.landmark[idx]
+            points.append([int(point.x * width), int(point.y * height)])
+        
+        points = np.array(points, dtype=np.int32)
+        cv2.fillPoly(mask, [points], 255)
+        mask = cv2.GaussianBlur(mask, (11, 11), 0)
+        return mask
+
+    def apply_effect(self, image, effect='none'):
+        """Apply selected effect to the image."""
+        if effect == 'none':
+            return image
+        elif effect == 'grayscale':
+            return cv2.cvtColor(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+        elif effect == 'blur':
+            return cv2.GaussianBlur(image, (21, 21), 0)
+        elif effect == 'sepia':
+            kernel = np.array([[0.272, 0.534, 0.131],
+                             [0.349, 0.686, 0.168],
+                             [0.393, 0.769, 0.189]])
+            return cv2.transform(image, kernel)
+
+    def swap_faces(self, source_img, target_img, effect='none', blend_amount=0.8):
+        """Perform face swapping between source and target images."""
+        source_landmarks = self.get_face_landmarks(source_img)
+        target_landmarks = self.get_face_landmarks(target_img)
+        
+        if source_landmarks is None or target_landmarks is None:
+            return None, "Could not detect faces in one or both images"
+        
+        try:
+            # Get key facial points for alignment
+            source_points = []
+            target_points = []
+            for idx in [33, 133, 362, 263]:  # Key points for alignment
+                source_point = source_landmarks.landmark[idx]
+                target_point = target_landmarks.landmark[idx]
+                
+                source_points.append([
+                    int(source_point.x * source_img.shape[1]),
+                    int(source_point.y * source_img.shape[0])
+                ])
+                target_points.append([
+                    int(target_point.x * target_img.shape[1]),
+                    int(target_point.y * target_img.shape[0])
+                ])
+            
+            source_points = np.float32(source_points)
+            target_points = np.float32(target_points)
+            
+            # Calculate transformation matrix
+            transform_matrix = cv2.getPerspectiveTransform(source_points, target_points)
+            
+            # Warp source face
+            warped_source = cv2.warpPerspective(
+                source_img,
+                transform_matrix,
+                (target_img.shape[1], target_img.shape[0])
+            )
+            
+            # Create and blend masks
+            target_mask = self.create_mask(target_img, target_landmarks)
+            mask_3channel = cv2.cvtColor(target_mask, cv2.COLOR_GRAY2BGR) / 255.0
+            
+            # Apply selected effect
+            warped_source = self.apply_effect(warped_source, effect)
+            
+            # Blend images
+            result = (warped_source * mask_3channel * blend_amount + 
+                     target_img * (1 - mask_3channel * blend_amount)).astype(np.uint8)
+            
+            return result, None
+            
+        except Exception as e:
+            return None, f"Error during face swapping: {str(e)}"
 
 def initialize_session_state():
     if 'api_key' not in st.session_state:
@@ -57,58 +133,33 @@ def main():
     # API Key Configuration
     with st.sidebar:
         st.header("API Configuration")
-        api_key = st.text_input("Enter your API Key", type="password")
+        api_key = st.text_input("Enter your API Key", type="password", value="demo-key")
         if st.button("Save API Key"):
             st.session_state.api_key = api_key
             st.success("API Key saved successfully!")
         
-        if st.session_state.api_key:
-            st.success("API Key is configured")
-        else:
-            st.warning("Please configure your API Key")
-        
         st.divider()
         
-        # Effect settings (only shown if API key is configured)
-        if st.session_state.api_key:
-            st.header("Settings")
-            effect = st.selectbox(
-                "Select effect",
-                ['none', 'grayscale', 'blur', 'sepia'],
-                help="Apply an effect to the swapped face"
-            )
-            
-            blend_amount = st.slider(
-                "Blend Amount",
-                0.0, 1.0, 0.8,
-                help="Adjust how strongly the face is blended"
-            )
-    
-    # Main content
-    if not st.session_state.api_key:
-        st.warning("Please configure your API Key in the sidebar to use the application.")
+        # Effect settings
+        st.header("Settings")
+        effect = st.selectbox(
+            "Select effect",
+            ['none', 'grayscale', 'blur', 'sepia'],
+            help="Apply an effect to the swapped face"
+        )
         
-        st.markdown("""
-        ### How to get an API Key:
-        1. Sign up at [API Provider Website]
-        2. Navigate to your dashboard
-        3. Generate a new API key
-        4. Copy and paste the key in the sidebar
-        
-        ### API Key Features:
-        - Secure face swapping
-        - Advanced effects
-        - High-quality processing
-        - Usage analytics
-        """)
-        return
+        blend_amount = st.slider(
+            "Blend Amount",
+            0.0, 1.0, 0.8,
+            help="Adjust how strongly the face is blended"
+        )
     
     st.markdown("""
     Upload two images to swap faces between them. The app will detect faces automatically and perform the swap.
     """)
     
     # Initialize face swapper with API key
-    face_swapper = APIFaceSwapper(st.session_state.api_key)
+    face_swapper = APIFaceSwapper(st.session_state.api_key or "demo-key")
     
     # Image upload section
     col1, col2 = st.columns(2)
@@ -123,13 +174,8 @@ def main():
     
     if source_image and target_image:
         try:
-            # Process images with API key authentication
+            # Process images
             with st.spinner("Processing... Please wait."):
-                # Your API processing code here
-                # Example:
-                # result = process_with_api(source_image, target_image, st.session_state.api_key)
-                
-                # For now, using local processing
                 source_bytes = np.asarray(bytearray(source_image.read()), dtype=np.uint8)
                 target_bytes = np.asarray(bytearray(target_image.read()), dtype=np.uint8)
                 
@@ -139,19 +185,17 @@ def main():
                 result, error = face_swapper.swap_faces(
                     source_img,
                     target_img,
-                    effect=effect if 'effect' in locals() else 'none',
-                    blend_amount=blend_amount if 'blend_amount' in locals() else 0.8
+                    effect=effect,
+                    blend_amount=blend_amount
                 )
                 
                 if result is not None:
-                    # Display results
-                    st.success("Face swap completed!")
-                    
-                    # Convert and display images
+                    # Convert images for display
                     source_rgb = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
                     target_rgb = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
                     result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
                     
+                    st.success("Face swap completed!")
                     cols = st.columns(3)
                     with cols[0]:
                         st.subheader("Source")
@@ -163,7 +207,7 @@ def main():
                         st.subheader("Result")
                         st.image(result_rgb, use_column_width=True)
                     
-                    # Download option
+                    # Download button
                     result_pil = Image.fromarray(result_rgb)
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
                         result_pil.save(tmp_file.name)
@@ -185,31 +229,19 @@ def main():
     # Usage instructions
     with st.expander("How to use"):
         st.markdown("""
-        1. Configure your API Key in the sidebar
-        2. Upload a source image containing the face you want to use
-        3. Upload a target image where you want to place the face
-        4. Adjust the settings in the sidebar:
+        1. Upload a source image containing the face you want to use
+        2. Upload a target image where you want to place the face
+        3. Adjust the settings in the sidebar:
            - Select an effect to apply
            - Adjust the blend amount
-        5. Wait for processing to complete
-        6. Download the result
+        4. Wait for processing to complete
+        5. Download the result
         
         **Tips for best results:**
         - Use clear, well-lit images
         - Ensure faces are visible and front-facing
         - Use high-quality images
-        - Keep API key secure
         """)
-
-    # API Usage Stats (if available)
-    if st.session_state.api_key:
-        with st.expander("API Usage Statistics"):
-            st.markdown("""
-            - Requests today: 0/100
-            - Total requests: 0
-            - API Status: Active
-            """)
-            # You can replace these with actual API usage statistics
 
 if __name__ == "__main__":
     main()
